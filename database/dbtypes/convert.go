@@ -17,16 +17,16 @@ var (
 
 // convertAssign is the same as convertAssignRows, but without the optional
 // rows argument.
-func convertAssign(dest, src interface{}) error {
-	return convertAssignRows(dest, src, nil)
-}
+// func convertAssign(dest, src interface{}) error {
+// 	return convertAssignRows(dest, src, nil)
+// }
 
-// convertAssignRows copies to dest the value in src, converting it if possible.
+// convertAssign copies to dest the value in src, converting it if possible.
 // An error is returned if the copy would result in loss of information.
 // dest should be a pointer type. If rows is passed in, the rows will
 // be used as the parent for any cursor values converted from a
 // driver.Rows to a *Rows.
-func convertAssignRows(dest, src interface{}, rows *sql.Rows) error {
+func convertAssign(dest, src interface{}) error {
 	// if the destination type implements the sql.Scanner interface, honor it
 	if scanner, ok := dest.(sql.Scanner); ok {
 		return scanner.Scan(src)
@@ -206,7 +206,7 @@ func convertAssignRows(dest, src interface{}, rows *sql.Rows) error {
 			return nil
 		}
 		dv.Set(reflect.New(dv.Type().Elem()))
-		return convertAssignRows(dv.Interface(), src, rows)
+		return convertAssignRows(dv.Interface(), src)
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		s := asString(src)
 		i64, err := strconv.ParseInt(s, 10, dv.Type().Bits())
@@ -287,7 +287,7 @@ func asString(src interface{}) string {
 	return fmt.Sprintf("%v", src)
 }
 
-func asBytes(buf []byte, rv reflect.Value) (b []byte, ok bool) {
+func asBytes(buf []byte, rv reflect.Value) ([]byte, bool) {
 	switch rv.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		return strconv.AppendInt(buf, rv.Int(), 10), true
@@ -303,5 +303,5 @@ func asBytes(buf []byte, rv reflect.Value) (b []byte, ok bool) {
 		s := rv.String()
 		return append(buf, s...), true
 	}
-	return
+	return nil, false
 }
