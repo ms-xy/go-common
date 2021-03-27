@@ -27,6 +27,11 @@ func convertAssign(dest, src interface{}) error {
 // be used as the parent for any cursor values converted from a
 // driver.Rows to a *Rows.
 func convertAssignRows(dest, src interface{}, rows *sql.Rows) error {
+	// if the destination type implements the sql.Scanner interface, honor it
+	if scanner, ok := dest.(sql.Scanner); ok {
+		return scanner.Scan(src)
+	}
+
 	// Common cases, without reflect.
 	switch s := src.(type) {
 	case string:
@@ -124,6 +129,7 @@ func convertAssignRows(dest, src interface{}, rows *sql.Rows) error {
 		return errUnsupportedTypeConversion
 	}
 
+	// Attempt conversion via simple type inspection
 	var sv reflect.Value
 
 	switch d := dest.(type) {
@@ -158,10 +164,6 @@ func convertAssignRows(dest, src interface{}, rows *sql.Rows) error {
 	case *interface{}:
 		*d = src
 		return nil
-	}
-
-	if scanner, ok := dest.(sql.Scanner); ok {
-		return scanner.Scan(src)
 	}
 
 	dpv := reflect.ValueOf(dest)
