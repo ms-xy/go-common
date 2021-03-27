@@ -3,59 +3,95 @@ package mapping
 import (
 	"database/sql"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"reflect"
 	"sync"
-
-	io "github.com/ms-xy/go-common/io"
 )
 
-type Mapping struct {
+type Mapping interface {
+	GetType() reflect.Type
+	GetFields() map[string]Field
+	GetFieldNames() []string
+
+	ScanOnce(pRows *sql.Rows) (interface{}, error)
+	ScanLimit(pRows *sql.Rows, limit int) ([]interface{}, error)
+}
+
+type MappingStruct struct {
 	Type       reflect.Type
 	Fields     map[string]Field
 	FieldNames []string
 }
 
-// ScanOnce scans a single row from the given `*sql.Rows` object, it expects any
-// error checks to happen before (you must call rows.Next() first yourself),
-// further it expects all fields for the scan in the order of definition present
-// in the struct used for the mapping.
-func (this *Mapping) ScanOnce(pRows *sql.Rows, rowID int) (interface{}, error) {
+func (this *MappingStruct) NewObject() {
+
+}
+
+func (this *MappingStruct) GetType() reflect.Type {
+	return this.Type
+}
+
+func (this *MappingStruct) GetFields() map[string]Field {
+	return this.Fields
+}
+
+func (this *MappingStruct) GetFieldNames() []string {
+	return this.FieldNames
+}
+
+/*
+ScanOnce scans a single row from the given `*sql.Rows` object, advancing the
+cursor before scanning with `rows.Next()`.
+Fields are expected in mapping field order.
+*/
+func (this *MappingStruct) ScanOnce(pRows *sql.Rows) (interface{}, error) {
 	oValue := reflect.Indirect(reflect.New(this.Type))
 	aFields := make([]interface{}, len(this.FieldNames))
 	for i := 0; i < len(this.FieldNames); i++ {
 		oField := oValue.Field(i)
 		aFields[i] = oField.Addr().Interface()
 	}
-	if err := pRows.Scan(aFields...); err != nil {
-		return nil, errors.New(
-			fmt.Sprintf("Error scanning row #%d: %s", rowID, err.Error()))
-	} else {
-		return oValue.Interface(), nil
+	if ok := pRows.Next(); ok {
+		err := pRows.Scan(aFields...)
+		return oValue.Interface(), err
 	}
+	return nil, pRows.Err()
 }
 
-// ScanLimit scans up to `limit` rows from the given `*sql.Rows` object,
-// checking `rows.Next()` before every call as well as `rows.Err()`, an error
-// object will be added to the result set if row could not be fetched.
-func (this *Mapping) ScanLimit(pRows *sql.Rows, limit uint64) []interface{} {
-	aResults := make([]interface{}, limit)
+// DefaultBatchScanSize specifies the default result array allocation size
+// used with ScanLimit
+var DefaultBatchScanSize = 256
+
+/*
+ScanLimit scans up to `limit` rows from the given `*sql.Rows` object,
+advancing the cursor in doing so.
+Upon encountering an error further scanning is aborted and the current result
+plus error returned.
+*/
+func (this *MappingStruct) ScanLimit(pRows *sql.Rows, limit int) ([]interface{}, error) {
 	i := 0
-	for ok := pRows.Next(); ok || pRows.Err() != nil; ok = pRows.Next() {
-		if err := pRows.Err(); err != nil {
-			aResults[i] = errors.New(
-				fmt.Sprintf("Error fetching row #%d: %s", i, err.Error()))
-		} else {
-			if result, err := this.ScanOnce(pRows, i); err != nil {
-				aResults[i] = err
-			} else {
-				aResults[i] = result
-			}
-		}
-		i++
+	aResults := make([]interface{}, 0)
+	n := limit
+	if limit <= 0 {
+		n = DefaultBatchScanSize
 	}
-	return aResults[:i]
+	for {
+		j := 0
+		aInterimsResults := make([]interface{}, n)
+		for ok := pRows.Next(); ok; ok = pRows.Next() {
+			if result, err := this.ScanOnce(pRows); err != nil {
+				aInterimsResults[j] = err
+			} else {
+				aInterimsResults[j] = result
+			}
+			j++
+			i++
+		}
+		aResults = append(aResults, aInterimsResults...)
+		if limit > 0 || len(aInterimsResults) < n {
+			break
+		}
+	}
+	return aResults[:i], pRows.Err()
 }
 
 /* -------------------------------------------------------------------------- */
@@ -78,24 +114,25 @@ func must(err error) {
 }
 
 func (fp FieldProperties) MarshalJSON() (bytes []byte, err error) {
-	oWriter := io.NewByteWriter()
-	oEncoder := json.NewEncoder(oWriter)
-	oWriter.MustWrite([]byte(`{`))
-	// oWriter.MustWrite([]byte(`"Alias":`))
-	// must(oEncoder.Encode(fp.Alias))
-	oWriter.MustWrite([]byte(`,"Type":`))
-	must(oEncoder.Encode(fp.Type.String()))
-	oWriter.MustWrite([]byte(`}`))
-	return oWriter.Get()
+	return json.Marshal(struct {
+		Type string
+	}{
+		Type: fp.Type.String(),
+	})
 }
 
 /* -------------------------------------------------------------------------- */
 
 var (
-	knownMappings = make(map[reflect.Type]Mapping)
+	knownMappings = make(map[reflect.Type]*MappingStruct)
 	lock          = sync.Mutex{}
 )
 
+/*
+GetMapping returns a mapping instance for the given type.
+Results are cached and subsequent requests for the same type are procured from
+the internal cache.
+*/
 func GetMapping(i interface{}) Mapping {
 	t := reflect.TypeOf(i)
 	if mapping, exists := knownMappings[t]; exists {
@@ -106,7 +143,7 @@ func GetMapping(i interface{}) Mapping {
 		if mapping, exists := knownMappings[t]; exists {
 			return mapping
 		} else {
-			mapping = Mapping{
+			mapping = &MappingStruct{
 				Type:       t,
 				Fields:     make(map[string]Field, t.NumField()),
 				FieldNames: make([]string, t.NumField()),
