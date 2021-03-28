@@ -3,6 +3,7 @@ package mapping
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"sync"
 )
@@ -20,10 +21,6 @@ type MappingStruct struct {
 	Type       reflect.Type
 	Fields     map[string]Field
 	FieldNames []string
-}
-
-func (this *MappingStruct) NewObject() {
-
 }
 
 func (this *MappingStruct) GetType() reflect.Type {
@@ -122,6 +119,32 @@ func (fp FieldProperties) MarshalJSON() (bytes []byte, err error) {
 }
 
 /* -------------------------------------------------------------------------- */
+
+var (
+	ErrWrongType = errors.New("Can only map values of a struct type")
+	ErrCantAddr  = errors.New("Inaccessible struct fields present")
+)
+
+/*
+ValuesOf returns the values associated with the given structure in their defined
+order, primarily for use with the transactions of the sibling package
+*/
+func ValuesOf(i interface{}) ([]interface{}, error) {
+	v := reflect.ValueOf(i)
+	if v.Kind() != reflect.Struct {
+		return nil, ErrWrongType
+	}
+	l := v.Type().NumField()
+	r := make([]interface{}, l)
+	for i := 0; i < l; i++ {
+		f := v.Field(i)
+		if !f.CanAddr() {
+			return nil, ErrCantAddr
+		}
+		r[i] = v.Field(i).Interface()
+	}
+	return r, nil
+}
 
 var (
 	knownMappings = make(map[reflect.Type]*MappingStruct)
