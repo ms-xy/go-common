@@ -14,32 +14,6 @@ import (
 	"github.com/ms-xy/go-common/database/mapping"
 )
 
-// GenericSelect convenience-wraps some SELECT functionality
-//
-// Deprecated: GenericSelect provides a subset of functionality available via
-// Select[One](..). Use either function where it suits you instead of
-// GenericSelect.
-func GenericSelect(db *sql.DB, t interface{}, fromTable string, where interface{}, limit int) ([]interface{}, error) {
-	oMapping := mapping.GetMapping(t)
-	oQuery := squirrel.Select(oMapping.GetFieldNames()...).From(fromTable)
-
-	if sWhere, ok := where.(string); ok {
-		if where != "" {
-			oQuery = oQuery.Where(sWhere)
-		}
-	} else if oWhere, ok := where.(squirrel.Sqlizer); ok {
-		oQuery = oQuery.Where(oWhere)
-	} else if where != nil {
-		panic(errors.New("Unknown type for function parameter 'where': " + reflect.TypeOf(where).String()))
-	}
-
-	if limit > 0 {
-		oQuery = oQuery.Limit(uint64(limit))
-	}
-
-	return Select(db, oQuery, oMapping, 0)
-}
-
 /*
 SelectOne runs a given query with limit 1 agains the given database within a
 read-only transaction, returning the result and/or any error that occured.
