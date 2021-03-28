@@ -36,16 +36,22 @@ func UpdateObjects(db *sql.DB, ctx context.Context, query squirrel.SelectBuilder
 			return err
 		}
 		for i := 0; i < len(objs); i++ {
-			stmt, err := tx.PrepareContext(ctx, queryString)
-			if err != nil {
-				return err
+			stmt, _err := tx.PrepareContext(ctx, queryString)
+			if _err != nil {
+				return _err
 			}
-			args, err := mapping.ValuesOf(objs[i])
-			if err != nil {
-				return err
+			args, _err := mapping.ValuesOf(objs[i])
+			if _err != nil {
+				return _err
 			}
-			result, err := stmt.ExecContext(ctx, args...)
-			affected, err := result.RowsAffected()
+			result, _err := stmt.ExecContext(ctx, args...)
+			if _err != nil {
+				return _err
+			}
+			affected, _err := result.RowsAffected()
+			if _err != nil {
+				return _err
+			}
 			rowsAffected += affected
 			numExecutions++
 		}
@@ -62,21 +68,24 @@ If bound arguments are saved in the query builder, they are used.
 func Update(db *sql.DB, ctx context.Context, query squirrel.SelectBuilder) (rowsAffected int64, err error) {
 	rowsAffected = 0
 	err = WithWriteTx(db, ctx, func(ctx context.Context, tx *sql.Tx) error {
-		queryString, boundArgs, err := query.ToSql()
-		if err != nil {
-			return err
+		queryString, boundArgs, _err := query.ToSql()
+		if _err != nil {
+			return _err
 		}
-		stmt, err := tx.PrepareContext(ctx, queryString)
-		if err != nil {
-			return err
+		stmt, _err := tx.PrepareContext(ctx, queryString)
+		if _err != nil {
+			return _err
 		}
-		result, err := stmt.ExecContext(ctx, boundArgs...)
-		if err != nil {
-			return err
+		result, _err := stmt.ExecContext(ctx, boundArgs...)
+		if _err != nil {
+			return _err
 		}
-		affected, err := result.RowsAffected()
+		affected, _err := result.RowsAffected()
+		if _err != nil {
+			return _err
+		}
 		rowsAffected = affected
-		return err
+		return nil
 	})
 	return
 }
