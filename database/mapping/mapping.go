@@ -94,7 +94,15 @@ func (this *MappingStruct) MultiScan(pRows SqlRows, limit int) (interface{}, err
 		}
 		aResults := this.makeSlicePtr(n, n)
 		i := 0
-		for ok := pRows.Next(); ok && ((limit == -1) || (i < limit)); ok, i = pRows.Next(), i+1 {
+		for ; (limit == -1) || (i < limit); i++ {
+			// next must only be called if limit has not been reached, thus can't be incorporated in
+			// the loop
+			ok := pRows.Next()
+			if !ok {
+				break
+			}
+			// old: for ok := pRows.Next(); ok && ((limit == -1) || (i < limit)); ok, i = pRows.Next(), i+1 {
+
 			// if an error happened, return slice of results up until the scan
 			if result, err := this.Scan(pRows); err != nil {
 				aResults.Elem().SetLen(i)
@@ -174,7 +182,8 @@ func ValuesOf(i interface{}) ([]interface{}, error) {
 	for i := 0; i < l; i++ {
 		f := v.Field(i)
 		if !f.CanInterface() {
-			return nil, fmt.Errorf("Cannot use value.Interface() on struct field `%s`", v.Type().Field(i).Name)
+			return nil, fmt.Errorf(
+				"Cannot use value.Interface() on struct field `%s`", v.Type().Field(i).Name)
 		}
 		r[i] = v.Field(i).Interface()
 	}
@@ -182,9 +191,16 @@ func ValuesOf(i interface{}) ([]interface{}, error) {
 }
 
 var (
-	knownMappings = make(map[reflect.Type]*MappingStruct)
-	lock          = sync.Mutex{}
+	knownMappings     = make(map[reflect.Type]*MappingStruct)
+	knownMappingsLock = sync.Mutex{}
+	lock              = sync.Mutex{}
 )
+
+func ResetKnownMappings() {
+	knownMappingsLock.Lock()
+	defer knownMappingsLock.Unlock()
+	knownMappings = make(map[reflect.Type]*MappingStruct)
+}
 
 /*
 GetMapping returns a mapping instance for the given type.
@@ -201,14 +217,20 @@ func GetMapping(i interface{}) (Mapping, error) {
 	if t.Kind() != reflect.Struct {
 		return nil, ErrWrongType
 	}
+	// master lock to avoid race conditions when resetting mappings
+	lock.Lock()
+	defer lock.Unlock()
+	// if a mapping exists, non needs to be created
 	if mapping, exists := knownMappings[t]; exists {
 		return mapping, nil
 	} else {
-		lock.Lock()
-		defer lock.Unlock()
+		// lock mappings then check again, might have been created in between
+		knownMappingsLock.Lock()
+		defer knownMappingsLock.Unlock()
 		if mapping, exists := knownMappings[t]; exists {
 			return mapping, nil
 		} else {
+			// we have certainty that mapping does not exist and nobody is working on creating it
 			mapping = &MappingStruct{
 				Type:       t,
 				Fields:     make(map[string]Field, t.NumField()),
@@ -240,14 +262,22 @@ func GetMapping(i interface{}) (Mapping, error) {
 	}
 }
 
+var (
+	fieldNameIdentifiers = []string{"db", "fieldname", "json"}
+)
+
+func SetFieldNameIdentifiers(identifiers []string) {
+	lock.Lock()
+	defer lock.Unlock()
+	fieldNameIdentifiers = identifiers
+	ResetKnownMappings()
+}
+
 func getFieldName(field reflect.StructField) string {
-	if dbMapName, exists := field.Tag.Lookup("dbMapName"); exists {
-		return dbMapName
-	} else if dbfield, exists := field.Tag.Lookup("dbfield"); exists {
-		return dbfield
-	} else if jsonName, exists := field.Tag.Lookup("json"); exists {
-		return jsonName
-	} else {
-		return field.Name
+	for _, key := range fieldNameIdentifiers {
+		if value, exists := field.Tag.Lookup(key); exists && (len(value) > 0) && (key != "json" || value != "-") {
+			return value
+		}
 	}
+	return field.Name
 }

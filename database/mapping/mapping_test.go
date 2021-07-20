@@ -16,8 +16,8 @@ type TestStruct struct {
 }
 
 type TestStructTags struct {
-    IntVal  int64 `dbfield:"i"`
-    IntVal2 int8  `dbMapName:"j"`
+    IntVal  int64 `db:"i" otherIdentifier:"someFieldName"`
+    IntVal2 int8  `fieldname:"j" anotherIdentifier:"evenMoreNames"`
     IntVal3 int16 `json:"k"`
     IntVal4 int32
 }
@@ -57,6 +57,7 @@ func TestGetMapping(t *testing.T) {
     require.True(t, ok2)
     require.Equal(t, reflect.TypeOf(string("")), f2.Properties.Type)
 
+    // ensure struct tags are working properly
     m, err = GetMapping(TestStructTags{})
     require.Nil(t, err)
     fields = m.GetFields()
@@ -73,6 +74,24 @@ func TestGetMapping(t *testing.T) {
     require.True(t, ok)
     require.Equal(t, reflect.TypeOf(int32(1)), f4.Properties.Type)
 
+    SetFieldNameIdentifiers([]string{"otherIdentifier", "anotherIdentifier"})
+    m, err = GetMapping(TestStructTags{})
+    require.Nil(t, err)
+    fields = m.GetFields()
+    f, ok = fields["someFieldName"]
+    require.True(t, ok)
+    require.Equal(t, reflect.TypeOf(int64(1)), f.Properties.Type)
+    f2, ok = fields["evenMoreNames"]
+    require.True(t, ok)
+    require.Equal(t, reflect.TypeOf(int8(1)), f2.Properties.Type)
+    f3, ok = fields["IntVal3"]
+    require.True(t, ok)
+    require.Equal(t, reflect.TypeOf(int16(1)), f3.Properties.Type)
+    f4, ok = fields["IntVal4"]
+    require.True(t, ok)
+    require.Equal(t, reflect.TypeOf(int32(1)), f4.Properties.Type)
+
+    // ensure non-struct types are correctly identified as erroneus
     m, err = GetMapping(1)
     require.NotNil(t, err)
     require.Nil(t, m)
@@ -165,7 +184,7 @@ func TestScan(t *testing.T) {
     tss, ok := vs.([]*TestStruct)
     require.True(t, ok)
     require.Equal(t, 10, len(tss))
-    mockRows.AssertNumberOfCalls(t, "Next", 11)
+    mockRows.AssertNumberOfCalls(t, "Next", 10)
     mockRows.AssertNumberOfCalls(t, "Scan", 10)
 
     // Testing Multiscan limit=-1, maxcap=500
