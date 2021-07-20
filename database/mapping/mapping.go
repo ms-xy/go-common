@@ -1,9 +1,9 @@
 package mapping
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 )
@@ -13,9 +13,11 @@ type Mapping interface {
 	GetFields() map[string]Field
 	GetFieldNames() []string
 
-	ScanOnce(pRows *sql.Rows) (interface{}, error)
-	ScanLimit(pRows *sql.Rows, limit int) ([]interface{}, error)
+	Scan(pRows SqlRows) (interface{}, error)
+	MultiScan(pRows SqlRows, limit int) (interface{}, error)
 }
+
+/* -------------------------------------------------------------------------- */
 
 type MappingStruct struct {
 	Type       reflect.Type
@@ -35,27 +37,39 @@ func (this *MappingStruct) GetFieldNames() []string {
 	return this.FieldNames
 }
 
+/* -------------------------------------------------------------------------- */
+
+type SqlRows interface {
+	Next() bool
+	Scan(dest ...interface{}) error
+	Err() error
+}
+
+/* -------------------------------------------------------------------------- */
+
 /*
-ScanOnce scans a single row from the given `*sql.Rows` object, advancing the
-cursor before scanning with `rows.Next()`.
-Fields are expected in mapping field order.
+ScanOnce scans a single row from the given `*sql.Rows` object.
+The database cursor is NOT increased using `rows.Next()`, this has to be done separately.
+Query fields are expected in mapping field order.
+Returns a pointer to the newly created object of the mapped type.
 */
-func (this *MappingStruct) ScanOnce(pRows *sql.Rows) (interface{}, error) {
-	oValue := reflect.Indirect(reflect.New(this.Type))
+func (this *MappingStruct) Scan(pRows SqlRows) (interface{}, error) {
+	pValue := reflect.New(this.Type)
+	oValue := reflect.Indirect(pValue)
 	aFields := make([]interface{}, len(this.FieldNames))
 	for i := 0; i < len(this.FieldNames); i++ {
 		oField := oValue.Field(i)
 		aFields[i] = oField.Addr().Interface()
 	}
-	if ok := pRows.Next(); ok {
-		err := pRows.Scan(aFields...)
-		return oValue.Interface(), err
+	if err := pRows.Scan(aFields...); err == nil {
+		return pValue.Interface(), nil
+	} else {
+		return nil, err
 	}
-	return nil, pRows.Err()
 }
 
 // DefaultBatchScanSize specifies the default result array allocation size
-// used with ScanLimit
+// used with ScanLimit. Default value is 256.
 var DefaultBatchScanSize = 256
 
 /*
@@ -63,32 +77,48 @@ ScanLimit scans up to `limit` rows from the given `*sql.Rows` object,
 advancing the cursor in doing so.
 Upon encountering an error further scanning is aborted and the current result
 plus error returned.
+Return value is a slice of pointers to the mapped object.
+Parameter `limit` defaults to `mapping.DefaultBachScanSize` (=256 default value).
+A limit of -1 results in scanning all available rows.
+Scanning with a limit of -1 is not adviced for large data sets, reflect.Copy is costly.
+Instead consider scanning multiple times or using a large limit directly.
+A limit of 0 results in returning an empty row-set.
 */
-func (this *MappingStruct) ScanLimit(pRows *sql.Rows, limit int) ([]interface{}, error) {
-	i := 0
-	aResults := make([]interface{}, 0)
-	n := limit
-	if limit <= 0 {
-		n = DefaultBatchScanSize
-	}
-	for {
-		j := 0
-		aInterimsResults := make([]interface{}, n)
-		for ok := pRows.Next(); ok; ok = pRows.Next() {
-			if result, err := this.ScanOnce(pRows); err != nil {
-				aInterimsResults[j] = err
+func (this *MappingStruct) MultiScan(pRows SqlRows, limit int) (interface{}, error) {
+	if limit == 0 {
+		return this.makeSlicePtr(0, 0).Elem().Interface(), nil
+	} else {
+		n := DefaultBatchScanSize
+		if limit > 0 {
+			n = limit
+		}
+		aResults := this.makeSlicePtr(n, n)
+		i := 0
+		for ok := pRows.Next(); ok && ((limit == -1) || (i < limit)); ok, i = pRows.Next(), i+1 {
+			// if an error happened, return slice of results up until the scan
+			if result, err := this.Scan(pRows); err != nil {
+				aResults.Elem().SetLen(i)
+				return aResults.Elem().Interface(), err
 			} else {
-				aInterimsResults[j] = result
+				if i >= n {
+					n = 2 * n
+					newSlice := reflect.MakeSlice(reflect.SliceOf(reflect.PtrTo(this.Type)), n, n)
+					reflect.Copy(newSlice, aResults.Elem())
+					aResults.Elem().Set(newSlice)
+				}
+				aResults.Elem().Index(i).Set(reflect.ValueOf(result))
 			}
-			j++
-			i++
 		}
-		aResults = append(aResults, aInterimsResults...)
-		if limit > 0 || len(aInterimsResults) < n {
-			break
-		}
+		aResults.Elem().SetLen(i)
+		return aResults.Elem().Interface(), nil
 	}
-	return aResults[:i], pRows.Err()
+}
+
+func (this *MappingStruct) makeSlicePtr(len, cap int) reflect.Value {
+	slice := reflect.MakeSlice(reflect.SliceOf(reflect.PtrTo(this.Type)), len, cap)
+	slicePtr := reflect.New(slice.Type())
+	slicePtr.Elem().Set(slice)
+	return slicePtr
 }
 
 /* -------------------------------------------------------------------------- */
@@ -121,8 +151,7 @@ func (fp FieldProperties) MarshalJSON() (bytes []byte, err error) {
 /* -------------------------------------------------------------------------- */
 
 var (
-	ErrWrongType = errors.New("Can only map values of a struct type")
-	ErrCantAddr  = errors.New("Inaccessible struct fields present")
+	ErrWrongType = errors.New("Supplied value not a struct")
 )
 
 /*
@@ -131,15 +160,21 @@ order, primarily for use with the transactions of the sibling package
 */
 func ValuesOf(i interface{}) ([]interface{}, error) {
 	v := reflect.ValueOf(i)
+	// indirect pointers until we have a struct
+	if v.Kind() == reflect.Ptr {
+		return ValuesOf(reflect.Indirect(v).Interface())
+	}
+	// require struct
 	if v.Kind() != reflect.Struct {
 		return nil, ErrWrongType
 	}
+	// iterate over all fields
 	l := v.Type().NumField()
 	r := make([]interface{}, l)
 	for i := 0; i < l; i++ {
 		f := v.Field(i)
-		if !f.CanAddr() {
-			return nil, ErrCantAddr
+		if !f.CanInterface() {
+			return nil, fmt.Errorf("Cannot use value.Interface() on struct field `%s`", v.Type().Field(i).Name)
 		}
 		r[i] = v.Field(i).Interface()
 	}
@@ -156,15 +191,23 @@ GetMapping returns a mapping instance for the given type.
 Results are cached and subsequent requests for the same type are procured from
 the internal cache.
 */
-func GetMapping(i interface{}) Mapping {
+func GetMapping(i interface{}) (Mapping, error) {
 	t := reflect.TypeOf(i)
+	for t.Kind() == reflect.Ptr {
+		v := reflect.Indirect(reflect.ValueOf(i))
+		t = v.Type()
+		i = v.Interface()
+	}
+	if t.Kind() != reflect.Struct {
+		return nil, ErrWrongType
+	}
 	if mapping, exists := knownMappings[t]; exists {
-		return mapping
+		return mapping, nil
 	} else {
 		lock.Lock()
 		defer lock.Unlock()
 		if mapping, exists := knownMappings[t]; exists {
-			return mapping
+			return mapping, nil
 		} else {
 			mapping = &MappingStruct{
 				Type:       t,
@@ -181,15 +224,7 @@ func GetMapping(i interface{}) Mapping {
 				}
 
 				// database field name
-				var (
-					exists    bool
-					fieldName string
-				)
-				if fieldName, exists = field.Tag.Lookup("dbfield"); !exists {
-					if fieldName, exists = field.Tag.Lookup("json"); !exists {
-						fieldName = field.Name
-					}
-				}
+				fieldName := getFieldName(field)
 
 				// write mapping
 				mapping.FieldNames[i] = fieldName
@@ -200,7 +235,19 @@ func GetMapping(i interface{}) Mapping {
 			}
 
 			knownMappings[t] = mapping
-			return mapping
+			return mapping, nil
 		}
+	}
+}
+
+func getFieldName(field reflect.StructField) string {
+	if dbMapName, exists := field.Tag.Lookup("dbMapName"); exists {
+		return dbMapName
+	} else if dbfield, exists := field.Tag.Lookup("dbfield"); exists {
+		return dbfield
+	} else if jsonName, exists := field.Tag.Lookup("json"); exists {
+		return jsonName
+	} else {
+		return field.Name
 	}
 }
