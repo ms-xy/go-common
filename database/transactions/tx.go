@@ -64,6 +64,8 @@ func WithTx(db *sql.DB, ctx context.Context, opts *sql.TxOptions, fn Transaction
 			}
 			if err != nil {
 				panic(errors.Wrap(r.(error), err.Error()))
+			} else {
+				panic(r)
 			}
 		}
 	}()
@@ -73,9 +75,11 @@ func WithTx(db *sql.DB, ctx context.Context, opts *sql.TxOptions, fn Transaction
 	result, err := fn(fnCtx, tx)
 	// error within the handler rolls back as well
 	if err != nil {
-		tx.Rollback()
+		if err2 := tx.Rollback(); err2 != nil {
+			err = errors.Wrap(err, err2.Error())
+		}
 	} else {
-		tx.Commit()
+		err = tx.Commit()
 	}
 	return result, err
 }
