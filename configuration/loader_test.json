@@ -1,0 +1,10 @@
+{
+    "anInt": 3600,
+    "aString": "xml",
+    "aMap": {
+        "anInt": 123456,
+        "aBoolean": false
+    },
+    "anFloat": 1.23,
+    "aStrFloat": "4.56"
+}
