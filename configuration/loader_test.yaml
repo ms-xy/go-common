@@ -5,3 +5,4 @@ aMap:
     aBoolean: false
 anFloat: 1.23
 aStrFloat: "4.56"
+onlyInYaml: yamlTest
