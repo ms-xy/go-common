@@ -28,6 +28,8 @@ type ConfigurationLoader interface {
 	// Same as GetTypeSafe, except it returns the default value if the key is
 	// not present
 	GetTypeSafeOrDefault(key string, ptrDest interface{}, defaultValue interface{}) error
+	// Print information about all contained config values
+	DumpConfig()
 }
 
 // -------------------------------------------------------------------------- //
@@ -49,6 +51,12 @@ func NewCombinedLoader() *CombinedLoader {
 	cl.loaders = make([]ConfigurationLoader, 0)
 	cl.loaderInfo = ""
 	return cl
+}
+
+func (cl *CombinedLoader) DumpConfig() {
+	for _, l := range cl.loaders {
+		l.DumpConfig()
+	}
 }
 
 func (cl *CombinedLoader) updateLoaderInfo(loader ConfigurationLoader) {
@@ -223,6 +231,10 @@ type MapConfigLoader struct {
 
 var _ ConfigurationLoader = (*MapConfigLoader)(nil)
 
+func (mcl *MapConfigLoader) DumpConfig() {
+	log.WithFields(mcl.data).Infof("configuration values obtained from '%s':", mcl.filepath)
+}
+
 func readFile(filepath string) ([]byte, error) {
 	if file, err := os.Open(filepath); err != nil {
 		return nil, err
@@ -231,7 +243,7 @@ func readFile(filepath string) ([]byte, error) {
 	}
 }
 
-func NewMapConfigLoader(data map[string]interface{}, configType, filepath, keySeparator string) *MapConfigLoader {
+func NewMapConfigLoader(data map[string]interface{}, filepath, configType, keySeparator string) *MapConfigLoader {
 	return &MapConfigLoader{
 		data:       data,
 		filepath:   filepath,
@@ -272,7 +284,7 @@ func LoadEnvConfiguration() (*MapConfigLoader, error) {
 			return nil, err
 		}
 	}
-	return NewMapConfigLoader(data, "", "env", "."), nil
+	return NewMapConfigLoader(data, "environment variables", "env", "."), nil
 }
 func loadKvRecursive(m map[string]interface{}, keys []string, value string, trail []string) error {
 	if len(keys) > 1 {
