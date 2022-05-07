@@ -140,14 +140,10 @@ func TestLoadYamlConfiguration(t *testing.T) {
 func TestLoadConfiguration(t *testing.T) {
 	filepath1 := "./loader_test.yaml"
 	filepath2 := "./loader_test.json"
-	loader, err := LoadConfiguration(
-		func() (ConfigurationLoader, error) { return LoadYamlConfiguration(filepath1) },
-		func() (ConfigurationLoader, error) { return LoadJsonConfiguration(filepath2) },
-	)
-	if err != nil {
-		t.Error(err)
-		t.FailNow()
-	}
+	loader := NewCombinedLoader()
+	loader.MustLoadYaml(filepath1)
+	loader.MustLoadJSON(filepath2)
+	loader.CanLoadJSON("non-existant-file")
 
 	// ----
 	key := "unmapped.key"
@@ -158,7 +154,7 @@ func TestLoadConfiguration(t *testing.T) {
 	assertType(t, key, value, "str")
 	assertEquals(t, key, value, "testValue")
 	var aString string
-	err = loader.GetTypeSafeOrDefault(key, &aString, "defaultValue")
+	err := loader.GetTypeSafeOrDefault(key, &aString, "defaultValue")
 	assertErrNil(t, key, err)
 	assertEquals(t, key, aString, "defaultValue")
 
@@ -217,9 +213,6 @@ func TestLoadConfiguration(t *testing.T) {
 	err = loader.GetTypeSafe(key, &anotherString2)
 	assertErrNil(t, key, err)
 	assertEquals(t, key, anotherString2, "jsonTest")
-}
-
-func runLoaderTest(t *testing.T, loader ConfigurationLoader) {
 }
 
 func assertType(t *testing.T, key string, value interface{}, expected interface{}) {
