@@ -94,21 +94,24 @@ const (
 )
 
 type Logger struct {
-	level  Level
-	logger *_log.Logger
-	fields Context
+	callDepth int
+	level     Level
+	logger    *_log.Logger
+	fields    Context
 }
 
 func New(level Level) *Logger {
 	l := new(Logger)
+	l.callDepth = 3
 	l.level = level
 	l.logger = _log.Default()
 	l.fields = emptyContextImpl()
 	return l
 }
 
-func getCaller() string {
-	if _, path, line, ok := runtime.Caller(3); ok {
+func (l *Logger) getCaller() string {
+	if _, path, line, ok := runtime.Caller(l.callDepth); ok {
+		_log.Println(path)
 		_, file := filepath.Split(path)
 		return colorCaller.Sprint(file) + ":" + colorLine.Sprint(line)
 	}
@@ -134,6 +137,7 @@ func getSeverity(level Level) string {
 
 func (l *Logger) WithField(key string, value interface{}) *Logger {
 	newLogger := new(Logger)
+	newLogger.callDepth = l.callDepth
 	newLogger.level = l.level
 	newLogger.logger = l.logger
 	newLogger.fields = l.fields.WithValue(key, value)
@@ -142,6 +146,7 @@ func (l *Logger) WithField(key string, value interface{}) *Logger {
 
 func (l *Logger) WithFields(fields Fields) *Logger {
 	newLogger := new(Logger)
+	newLogger.callDepth = l.callDepth
 	newLogger.level = l.level
 	newLogger.logger = l.logger
 	newLogger.fields = l.fields.WithValues(fields)
@@ -166,7 +171,7 @@ func (l *Logger) structure(level Level, msgs ...interface{}) []interface{} {
 	ctx := make([]interface{}, 3+len(msgs))
 	//ctx[0] = timestamp
 	ctx[0] = getSeverity(level)
-	ctx[1] = getCaller() + ":"
+	ctx[1] = l.getCaller() + ":"
 	for i, v := range msgs {
 		ctx[2+i] = v
 	}
@@ -234,7 +239,12 @@ func (l *Logger) Panicf(f string, msgs ...interface{}) {
 	}
 }
 
-var defaultLogger = New(LevelInfo)
+var defaultLogger *Logger
+
+func init() {
+	defaultLogger = New(LevelInfo)
+	defaultLogger.callDepth = 4
+}
 
 func WithField(key string, value interface{}) *Logger {
 	return defaultLogger.WithField(key, value)
